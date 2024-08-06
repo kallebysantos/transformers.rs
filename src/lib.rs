@@ -1,14 +1,12 @@
-use std::{
-    fs::{self, File},
-    io::BufReader,
-    path::Path,
-};
+use serde_json::{Map, Value};
+use std::{fs::File, io::BufReader, path::Path};
 
-use ndarray::{Array1, ArrayView1, Axis, IntoNdProducer, RemoveAxis};
+pub use ndarray;
+use ndarray::{Array1, Axis};
+
 pub use ort;
 use ort::{inputs, ArrayExtensions, GraphOptimizationLevel, Result, Session};
 
-use serde_json::{Map, Value};
 pub use tokenizers;
 use tokenizers::Tokenizer;
 
@@ -16,13 +14,15 @@ pub fn add(left: usize, right: usize) -> usize {
     left + right
 }
 
-#[derive(Debug)]
+#[derive(Debug, Clone)]
 pub struct SentimentAnalysisOutput {
     pub label: String,
     pub score: f32,
 }
 
-pub fn sentiment_analysis(inputs: Vec<String>) -> Result<Vec<Vec<SentimentAnalysisOutput>>> {
+type SentimentAnalysisResult = Result<(SentimentAnalysisOutput, SentimentAnalysisOutput)>;
+
+pub fn sentiment_analysis(inputs: String) -> SentimentAnalysisResult {
     let base_path = "/home/kalleby/my-projects/rust/machine-lerning/transformers-rs/temp/models/sentiment_analysis/";
     let model_path = Path::new(&base_path).join("model.onnx");
     let config_path = Path::new(&base_path).join("config.json");
@@ -36,11 +36,10 @@ pub fn sentiment_analysis(inputs: Vec<String>) -> Result<Vec<Vec<SentimentAnalys
         .with_intra_threads(4)?
         .commit_from_file(model_path)?;
 
-    println!("{:?}", model.inputs);
-    println!("{:?}", model.outputs);
-
     let tokenizer = Tokenizer::from_file(tokenizer_path).unwrap();
     let encoded = tokenizer.encode(inputs, true).unwrap();
+
+    // TODO: Encode using batch, Accept multiple inputs
 
     let input_ids = encoded
         .get_ids()
@@ -54,10 +53,6 @@ pub fn sentiment_analysis(inputs: Vec<String>) -> Result<Vec<Vec<SentimentAnalys
         .map(|v| i64::from(*v))
         .collect::<Vec<_>>();
 
-    // println!("encoded: {:?}", encoded);
-    // println!("input_ids: {:?}", input_ids);
-    // println!("attention_mask: {:?}", attention_mask);
-
     // Sentiment Analysis Shape [-1,-1] = Array2
     let input_tensors = inputs! {
         "input_ids" =>  Array1::from_vec(input_ids).insert_axis(Axis(0)),
@@ -69,34 +64,23 @@ pub fn sentiment_analysis(inputs: Vec<String>) -> Result<Vec<Vec<SentimentAnalys
     let outputs = outputs.softmax(Axis(1));
 
     let labels = config.get("id2label").unwrap();
-    // println!("lables: {:?}", labels);
-    // println!("lables: {:?}", labels.get("0"));
 
-    let outputs = outputs
-        .rows()
-        .into_producer()
-        .into_iter()
-        .map(|row| {
-            row.into_iter()
-                .enumerate()
-                // .inspect(|tu| println!("{:?}", tu))
-                .map(|(i, val)| SentimentAnalysisOutput {
-                    label: labels
-                        .get(i.to_string())
-                        .unwrap()
-                        .as_str()
-                        .unwrap()
-                        .to_owned(),
-                    //label: "TESTE".to_owned(),
-                    score: *val,
-                })
-                .collect::<Vec<_>>()
-        })
-        .collect::<Vec<_>>();
+    let mut results = vec![];
 
-    println!("outputs: {:?}", outputs);
-    // let outputs = outputs["last_hidden_state"];
-    Ok(outputs)
+    for row in outputs.rows() {
+        let item0 = SentimentAnalysisOutput {
+            label: labels.get("0").unwrap().to_string(),
+            score: *row.get(0).unwrap(),
+        };
+        let item1 = SentimentAnalysisOutput {
+            label: labels.get("1").unwrap().to_string(),
+            score: *row.get(1).unwrap(),
+        };
+
+        results.push((item0, item1));
+    }
+
+    Ok(results.first().unwrap().to_owned())
 }
 
 #[cfg(test)]
