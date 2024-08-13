@@ -1,17 +1,21 @@
+use serde::{Deserialize, Serialize};
 use serde_json::{Map, Value};
 use std::{fs::File, io::BufReader, path::Path};
 
 pub use ndarray;
-use ndarray::{Array1, Axis};
+use ndarray::{Array2, Axis};
 
 pub use ort;
 use ort::{inputs, ArrayExtensions, GraphOptimizationLevel, Result, Session};
 
 pub use tokenizers;
-use tokenizers::Tokenizer;
+use tokenizers::{pad_encodings, PaddingParams, Tokenizer};
 
-pub fn add(left: usize, right: usize) -> usize {
-    left + right
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(untagged)]
+pub enum SentimentAnalysisInput {
+    Single(String),
+    Batch(Vec<String>),
 }
 
 #[derive(Debug, Clone)]
@@ -20,9 +24,9 @@ pub struct SentimentAnalysisOutput {
     pub score: f32,
 }
 
-type SentimentAnalysisResult = Result<(SentimentAnalysisOutput, SentimentAnalysisOutput)>;
+type SentimentAnalysisResult = Result<Vec<SentimentAnalysisOutput>>;
 
-pub fn sentiment_analysis(inputs: String) -> SentimentAnalysisResult {
+pub fn sentiment_analysis(input: SentimentAnalysisInput) -> SentimentAnalysisResult {
     let base_path = "/home/kalleby/my-projects/rust/machine-lerning/transformers-rs/temp/models/sentiment_analysis/";
     let model_path = Path::new(&base_path).join("model.onnx");
     let config_path = Path::new(&base_path).join("config.json");
@@ -37,26 +41,33 @@ pub fn sentiment_analysis(inputs: String) -> SentimentAnalysisResult {
         .commit_from_file(model_path)?;
 
     let tokenizer = Tokenizer::from_file(tokenizer_path).unwrap();
-    let encoded = tokenizer.encode(inputs, true).unwrap();
 
-    // TODO: Encode using batch, Accept multiple inputs
+    let input = match input {
+        SentimentAnalysisInput::Single(value) => vec![value],
+        SentimentAnalysisInput::Batch(values) => values,
+    };
 
-    let input_ids = encoded
-        .get_ids()
+    let mut encodings = tokenizer.encode_batch(input.to_owned(), false)?;
+
+    // We use it instead of overriding the Tokenizer
+    pad_encodings(encodings.as_mut_slice(), &PaddingParams::default())?;
+
+    let padded_token_length = encodings.get(0).unwrap().len();
+
+    let input_ids = encodings
         .iter()
-        .map(|v| i64::from(*v))
+        .flat_map(|e| e.get_ids().iter().map(|v| i64::from(*v)))
         .collect::<Vec<_>>();
 
-    let attention_mask = encoded
-        .get_attention_mask()
+    let attention_mask = encodings
         .iter()
-        .map(|v| i64::from(*v))
+        .flat_map(|e| e.get_ids().iter().map(|v| i64::from(*v)))
         .collect::<Vec<_>>();
 
     // Sentiment Analysis Shape [-1,-1] = Array2
     let input_tensors = inputs! {
-        "input_ids" =>  Array1::from_vec(input_ids).insert_axis(Axis(0)),
-        "attention_mask" => Array1::from_vec(attention_mask).insert_axis(Axis(0))
+        "input_ids" =>  Array2::from_shape_vec([input.len(), padded_token_length], input_ids).unwrap(),
+        "attention_mask" => Array2::from_shape_vec([input.len(), padded_token_length], attention_mask).unwrap()
     }?;
 
     let outputs = model.run(input_tensors)?;
@@ -66,21 +77,23 @@ pub fn sentiment_analysis(inputs: String) -> SentimentAnalysisResult {
     let labels = config.get("id2label").unwrap();
 
     let mut results = vec![];
-
     for row in outputs.rows() {
-        let item0 = SentimentAnalysisOutput {
-            label: labels.get("0").unwrap().to_string(),
-            score: *row.get(0).unwrap(),
-        };
-        let item1 = SentimentAnalysisOutput {
-            label: labels.get("1").unwrap().to_string(),
-            score: *row.get(1).unwrap(),
-        };
-
-        results.push((item0, item1));
+        if let Some((label, score)) = row
+            .iter()
+            .enumerate()
+            .max_by(|a, b| a.1.partial_cmp(b.1).unwrap())
+        {
+            results.push(SentimentAnalysisOutput {
+                label: labels
+                    .get(label.to_string())
+                    .map(|label| label.as_str().unwrap().into())
+                    .unwrap(),
+                score: *score,
+            })
+        }
     }
 
-    Ok(results.first().unwrap().to_owned())
+    Ok(results)
 }
 
 #[cfg(test)]
@@ -88,8 +101,21 @@ mod tests {
     use super::*;
 
     #[test]
-    fn it_works() {
-        let result = add(2, 2);
-        assert_eq!(result, 4);
+    fn predict_inputs() {
+        let input = SentimentAnalysisInput::Batch(vec![
+            String::from("I've been waiting for a HuggingFace course my whole life."),
+            String::from("I hate this so much!"),
+        ]);
+        let result = sentiment_analysis(input.to_owned()).unwrap();
+
+        assert_eq!(2, result.len());
+        assert_eq!("POSITIVE", result[0].label);
+        assert_eq!("NEGATIVE", result[1].label);
+
+        let input = SentimentAnalysisInput::Single(String::from("I love candies"));
+        let result = sentiment_analysis(input.to_owned()).unwrap();
+
+        assert_eq!(1, result.len());
+        assert_eq!("POSITIVE", result[0].label);
     }
 }
