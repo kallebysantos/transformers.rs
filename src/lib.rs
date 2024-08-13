@@ -118,4 +118,24 @@ mod tests {
         assert_eq!(1, result.len());
         assert_eq!("POSITIVE", result[0].label);
     }
+
+    #[test]
+    fn predict_from_json() {
+        let input_json = r#"[
+            "I've been waiting for a HuggingFace course my whole life.",
+            "I hate this so much!"
+        ]"#;
+
+        let result = sentiment_analysis(serde_json::from_str(input_json).unwrap()).unwrap();
+
+        assert_eq!(2, result.len());
+        assert_eq!("POSITIVE", result[0].label);
+        assert_eq!("NEGATIVE", result[1].label);
+
+        let input_json = r#""I love candies""#;
+        let result = sentiment_analysis(serde_json::from_str(input_json).unwrap()).unwrap();
+
+        assert_eq!(1, result.len());
+        assert_eq!("POSITIVE", result[0].label);
+    }
 }
