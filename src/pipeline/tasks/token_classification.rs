@@ -13,6 +13,7 @@ use crate::argmax;
 pub enum TokenClassificationAggregationStrategy {
     None,
     Simple,
+    Max,
 }
 
 #[derive(Deserialize, Debug)]
@@ -152,6 +153,9 @@ pub fn token_classification(
             TokenClassificationAggregationStrategy::Simple => TokenClassificationOutput::Grouped(
                 simple_aggregation(classifications, &input, &options.ignore_labels),
             ),
+            TokenClassificationAggregationStrategy::Max => TokenClassificationOutput::Grouped(
+                max_aggregation(classifications, &input, &options.ignore_labels),
+            ),
         }
     });
 
@@ -197,16 +201,86 @@ fn simple_aggregation(
 
         let start = item.start;
         let end = group.last().map_or(item.end, |last| last.end);
-        let word = original_text.get(start..end).unwrap();
+        let word = String::from(original_text.get(start..end).unwrap());
 
         // Apply mean score
         let score = group.iter().map(|i| i.score).sum::<f32>() / group.len() as f32;
 
         result.push(ClassifiedTokenGroup {
             group_entity: label.to_owned(),
-            tokens: group.to_owned(),
+            tokens: group,
             score,
-            word: word.to_owned(),
+            word,
+            start,
+            end,
+        })
+    }
+
+    result
+}
+
+fn max_aggregation(
+    iter: impl IntoIterator<Item = RawClassifiedToken>,
+    original_text: &str,
+    ignore_labels: &[String],
+) -> Vec<ClassifiedTokenGroup> {
+    let mut iter = iter.into_iter().peekable();
+    let mut result = vec![];
+
+    loop {
+        let Some(item) = iter.next() else {
+            break;
+        };
+
+        let Some((_, label)) = item.entity.split_at_checked(2) else {
+            continue;
+        };
+
+        if ignore_labels.iter().any(|to_ignore| to_ignore == label) {
+            continue;
+        }
+
+        let child_label = format!("I-{label}");
+
+        let start = item.start;
+        let mut end = item.end;
+
+        // Peeking take_while()
+        let mut group = vec![item.to_owned()];
+
+        loop {
+            let Some(child) = iter.next_if(|other| {
+                other.entity == child_label
+                    || (other.start == end
+                        && !ignore_labels
+                            .iter()
+                            .any(|to_ignore| to_ignore.contains(&other.entity)))
+            }) else {
+                break;
+            };
+
+            end = child.end;
+            group.push(child);
+        }
+
+        // let end = group.last().map_or(item.end, |last| last.end);
+        let word = String::from(original_text.get(start..end).unwrap());
+
+        // Apply max score
+        let max = group
+            .iter()
+            .max_by(|a, b| a.score.total_cmp(&b.score))
+            .unwrap();
+
+        result.push(ClassifiedTokenGroup {
+            group_entity: max
+                .entity
+                .split_at_checked(2)
+                .map_or(label, |(_, max_label)| max_label)
+                .to_owned(),
+            tokens: group.to_owned(),
+            score: max.score,
+            word,
             start,
             end,
         })
