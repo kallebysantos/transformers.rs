@@ -1,7 +1,8 @@
 use transformers_rs::tasks::{
-    feature_extraction, sentiment_analysis, token_classification, zero_shot_classification,
-    FeatureExtractionInput, SentimentAnalysisInput, TaskIO, TokenClassificationAggregationStrategy,
-    TokenClassificationOptions, ZeroShotClassificationInput,
+    feature_extraction, sentiment_analysis, seq_to_seq, token_classification,
+    zero_shot_classification, FeatureExtractionInput, SentimentAnalysisInput, TaskIO,
+    TokenClassificationAggregationStrategy, TokenClassificationOptions,
+    ZeroShotClassificationInput,
 };
 
 fn main() {
@@ -57,18 +58,25 @@ fn main() {
         println!("Result: {:#?}", result);
     */
 
-    let result = token_classification(
-        String::from(
-            "Neste sentido, cito Dimitri Dimoulis que agora no estado de São Paulo... Ou como diz Konrad Hesse, o texto da norma..."
-            // "My name is Sylvain, I'm russian and I work at Microsoft in Brooklyn since 14/02/2024.",
-            //"Alice and Bob",
-        ),
-        Some(TokenClassificationOptions {
-             aggregation_strategy: TokenClassificationAggregationStrategy::Max,
-            //ignore_labels: vec![String::from("O"), String::from("PER")], //..Default::default()
-            ..Default::default()
-        }),
-    );
+    /*
+        let result = token_classification(
+            String::from(
+                "Neste sentido, cito Dimitri Dimoulis que agora no estado de São Paulo... Ou como diz Konrad Hesse, o texto da norma..."
+                // "My name is Sylvain, I'm russian and I work at Microsoft in Brooklyn since 14/02/2024.",
+                //"Alice and Bob",
+            ),
+            Some(TokenClassificationOptions {
+                 aggregation_strategy: TokenClassificationAggregationStrategy::Max,
+                //ignore_labels: vec![String::from("O"), String::from("PER")], //..Default::default()
+                ..Default::default()
+            }),
+        );
 
-    println!("\n\nResult: {:#?}", result);
+        println!("\n\nResult: {:#?}", result);
+    */
+
+    seq_to_seq(String::from(
+        "Translate English to German: Hello my name is Sylvain",
+    ))
+    .unwrap();
 }
